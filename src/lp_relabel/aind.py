@@ -21,8 +21,10 @@ import yaml
 logger = logging.getLogger(__name__)
 
 BUCKET_URL = "https://aind-open-data.s3.amazonaws.com"
-PREDICTIONS = "pred_outputs/video_preds/video_predictions.csv"
-CONFIDENCE = "eval_outputs/video/eval_metrics/confidence_bodypart_mean.csv"
+# Files are named after the video's stem: "video" for BottomCamera/video.mp4,
+# "bottom_camera" for older sessions' bottom_camera.mp4.
+PREDICTIONS = "pred_outputs/video_preds/{stem}_predictions.csv"
+CONFIDENCE = "eval_outputs/{stem}/eval_metrics/confidence_bodypart_mean.csv"
 _ASSET_RE = re.compile(r"^(behavior_(\d+)_[\d-]+_[\d-]+)_videoprocessed_([\d-]+_[\d-]+)/$")
 
 
@@ -58,6 +60,7 @@ def _asset_info(asset: str) -> dict | None:
     model = (config.get("lightning_pose_inference") or {}).get("model_name", "")
     session = config.get("behavior_data_asset_name") or m.group(1)
     subpath = config.get("behavior_subpath", "")
+    stem = subpath.rsplit("/", 1)[-1].rsplit(".", 1)[0] or "video"
     row = {
         "session": session,
         "mouse": m.group(2),
@@ -66,11 +69,11 @@ def _asset_info(asset: str) -> dict | None:
         "model": model,
         # "BottomCamera/video.mp4" (newer sessions) or "bottom_camera.mp4" (older)
         "camera": subpath.split("/")[0] if "/" in subpath else subpath.rsplit(".", 1)[0],
-        "pose": f"{BUCKET_URL}/{asset}{PREDICTIONS}",
+        "pose": f"{BUCKET_URL}/{asset}{PREDICTIONS.format(stem=stem)}",
         "video": f"{BUCKET_URL}/{session}/behavior-videos/{subpath}",
     }
     try:  # per-keypoint mean likelihood, "0.92 ± 0.18" -> 0.92
-        conf = pd.read_csv(f"{BUCKET_URL}/{asset}{CONFIDENCE}")
+        conf = pd.read_csv(f"{BUCKET_URL}/{asset}{CONFIDENCE.format(stem=stem)}")
         for col in conf.columns[1:]:
             row[f"conf_{col}"] = float(str(conf[col].iloc[0]).split()[0])
     except Exception:

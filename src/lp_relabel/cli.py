@@ -46,7 +46,6 @@ def cmd_select(args) -> None:
     data_dir = Path(args.data_dir)
     label_csv = data_dir / f"{args.label_file}.csv"
     excluded = project.known_frames(data_dir, [label_csv] + [Path(p) for p in args.exclude_labels])
-    log_rows = []
     keypoints_all: list[str] | None = None
 
     for row in _sessions(args).itertuples(index=False):
@@ -101,17 +100,11 @@ def cmd_select(args) -> None:
         picks.insert(0, "session", session)
         picks.insert(1, "video", str(row.video))
         picks["frame_path"] = [project.frame_path(folder, f) for f in picks["frame"]]
-        log_rows.append(picks)
-
-    if not log_rows:
-        return
-    log = pd.concat(log_rows, ignore_index=True)
-    log["model_name"] = args.model_name
-    log["created"] = datetime.now().isoformat(timespec="seconds")
-    out = Path(args.selection_out) if args.selection_out else data_dir / f"{args.label_file}.selection.tsv"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    log.to_csv(out, mode="a", header=not out.exists(), index=False, sep="\t")
-    logger.info("wrote %d rows to %s", len(log), out)
+        picks["model_name"] = args.model_name
+        picks["created"] = datetime.now().isoformat(timespec="seconds")
+        out = Path(args.selection_out) if args.selection_out else data_dir / f"{args.label_file}.selection.tsv"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        picks.to_csv(out, mode="a", header=not out.exists(), index=False, sep="\t")
 
 
 def cmd_merge(args) -> None:

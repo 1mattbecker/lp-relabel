@@ -13,7 +13,7 @@ def test_asset_info_builds_urls(monkeypatch):
     row = aind._asset_info("behavior_751181_2025-02-27_11-24-44_videoprocessed_2025-10-29_21-59-06/")
     assert row["mouse"] == "751181" and row["camera"] == "BottomCamera"
     assert row["video"].endswith("/behavior_751181_2025-02-27_11-24-44/behavior-videos/BottomCamera/video.mp4")
-    assert row["pose"].endswith("_videoprocessed_2025-10-29_21-59-06/" + aind.PREDICTIONS)
+    assert row["pose"].endswith("_videoprocessed_2025-10-29_21-59-06/pred_outputs/video_preds/video_predictions.csv")
 
 
 def test_older_layout_camera_name(monkeypatch):
@@ -21,6 +21,7 @@ def test_older_layout_camera_name(monkeypatch):
     monkeypatch.setattr(aind.pd, "read_csv", lambda url: (_ for _ in ()).throw(OSError()))
     row = aind._asset_info("behavior_784803_2025-07-01_13-58-23_videoprocessed_2025-11-02_10-00-00/")
     assert row["camera"] == "bottom_camera"
+    assert row["pose"].endswith("/pred_outputs/video_preds/bottom_camera_predictions.csv")
 
 
 def test_non_asset_is_skipped():
