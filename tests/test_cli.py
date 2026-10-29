@@ -77,3 +77,32 @@ def test_merge(tmp_path, video):
     main(["merge", str(proj / "CollectedData.csv"), str(proj / "CollectedData.csv"), "-o", str(out),
           "--data-dir", str(proj)])  # fmt: skip
     assert len(pd.read_csv(out, header=[0, 1, 2], index_col=0)) == 2
+
+
+def test_select_from_sparse_predictions(tmp_path, video):
+    """lp-capsule writes only window rows, indexed by video frame."""
+    pose = make_pose_csv(tmp_path / "pred.csv", 600)
+    df = pd.read_csv(pose, header=[0, 1, 2], index_col=0)
+    df = df.iloc[list(range(100, 200)) + list(range(400, 500))]  # two windows
+    df.iloc[150, 3] += 50  # frame 450 (row 150): tongue_tip x spike
+    df.to_csv(pose)
+    run_select(tmp_path, video, pose, "--random-fraction", "0", "-n", "2")
+    proj = tmp_path / "proj"
+    lines = [json.loads(x) for x in (proj / "CollectedData.unlabeled.jsonl").read_text().splitlines()]
+    frames = sorted(int(e["frame_path"][-12:-4]) for e in lines)
+    assert 450 in frames and all(100 <= f < 200 or 400 <= f < 500 for f in frames)
+    for f in frames:
+        for c in range(f - 2, f + 3):
+            assert decode_image(proj / "labeled-data" / "mouse1_2025-07-03" / f"img{c:08d}.jpg") == c
+    entry = next(e for e in lines if e["frame_path"].endswith("img00000450.jpg"))
+    tongue = next(p for p in entry["predictions"]["predictions"] if p["keypoint_name"] == "tongue_tip")
+    assert abs(tongue["x"] - df.loc[450, ("heatmap_tracker", "tongue_tip", "x")]) < 1e-3
+
+
+def test_sparse_frames_past_the_video_are_refused(tmp_path, video):
+    pose = make_pose_csv(tmp_path / "pred.csv", 600)
+    df = pd.read_csv(pose, header=[0, 1, 2], index_col=0).iloc[100:200]
+    df.index = df.index + 550  # frames 650..749, past the 600-frame video
+    df.to_csv(pose)
+    with pytest.raises(SystemExit, match="frames 650..749"):
+        run_select(tmp_path, video, pose)

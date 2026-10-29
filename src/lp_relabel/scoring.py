@@ -10,7 +10,8 @@ Two signals, both available without labels:
   units of that keypoint's median such distance. A one-frame spike is almost
   always an error at high frame rates. Only computed where all three frames have
   likelihood >= ``jump_min_likelihood``, so appearing / disappearing points are
-  not jumps.
+  not jumps, and only where the three rows are consecutive video frames, so the
+  gap between two windows of a sparse file is not a jump.
 
 Each signal is the max over keypoints, then turned into a percentile rank within
 the video, and the score is their weighted mean.
@@ -38,8 +39,13 @@ def likelihood_score(lik: np.ndarray, mode: str = "uncertain") -> np.ndarray:
     return per_kp.max(axis=1)
 
 
-def jump_score(xy: np.ndarray, lik: np.ndarray, min_likelihood: float = 0.5) -> np.ndarray:
-    """Per-frame spike score: max over keypoints of the normalized midpoint distance."""
+def jump_score(
+    xy: np.ndarray, lik: np.ndarray, min_likelihood: float = 0.5, frames: np.ndarray | None = None
+) -> np.ndarray:
+    """Per-frame spike score: max over keypoints of the normalized midpoint distance.
+
+    ``frames`` gives each row's video frame (default consecutive rows).
+    """
     n, k, _ = xy.shape
     out = np.zeros((n, k))
     if n < 3:
@@ -47,6 +53,8 @@ def jump_score(xy: np.ndarray, lik: np.ndarray, min_likelihood: float = 0.5) -> 
     mid = 0.5 * (xy[:-2] + xy[2:])
     dist = np.linalg.norm(xy[1:-1] - mid, axis=-1)  # (n-2, k)
     ok = (lik[:-2] >= min_likelihood) & (lik[1:-1] >= min_likelihood) & (lik[2:] >= min_likelihood)
+    if frames is not None:
+        ok &= (frames[2:] - frames[:-2] == 2)[:, None]  # increasing, so both steps are 1
     dist = np.where(ok & np.isfinite(dist), dist, np.nan)
     for j in range(k):
         col = dist[:, j]
@@ -65,14 +73,14 @@ def frame_scores(
     likelihood_weight: float = 1.0,
     jump_weight: float = 1.0,
 ) -> pd.DataFrame:
-    """Score every frame. Columns: frame, lik_score, jump_score, score (0..1)."""
+    """Score every predicted frame. Columns: frame (video frame), lik_score, jump_score, score (0..1)."""
     lik_s = likelihood_score(track.likelihood, likelihood_mode)
-    jump_s = jump_score(track.xy, track.likelihood, jump_min_likelihood)
+    jump_s = jump_score(track.xy, track.likelihood, jump_min_likelihood, track.frames)
     total = likelihood_weight + jump_weight
     if total <= 0:
         raise ValueError("weights must sum to more than 0")
     rank = lambda a: pd.Series(a).rank(pct=True).to_numpy()  # noqa: E731
     score = (likelihood_weight * rank(lik_s) + jump_weight * rank(jump_s)) / total
     return pd.DataFrame(
-        {"frame": np.arange(track.n_frames), "lik_score": lik_s, "jump_score": jump_s, "score": score}
+        {"frame": track.frames, "lik_score": lik_s, "jump_score": jump_s, "score": score}
     )

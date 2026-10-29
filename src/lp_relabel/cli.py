@@ -67,7 +67,7 @@ def cmd_select(args) -> None:
         windows = getattr(row, "windows", None)
         allowed = None
         if windows is not None and not pd.isna(windows) and str(windows):
-            allowed = read_windows(windows, track.n_frames, args.pre, args.post)
+            allowed = read_windows(windows, track.frames, args.pre, args.post)
         exclude = {f for (fold, f) in excluded if fold == folder}
         picks = pick_frames(
             scores, args.n, args.min_gap, args.context, args.random_fraction, allowed, exclude, args.seed
@@ -79,9 +79,17 @@ def cmd_select(args) -> None:
 
             video = resolve_video(str(row.video))
             index = read_mp4_frame_index(video)
-            if index.n_samples != track.n_frames and not args.allow_length_mismatch:
+            # A whole-video file must match the video exactly (a wrong pairing shows
+            # here); a sparse one must only lie inside it.
+            mismatch = (
+                index.n_samples != track.n_frames
+                if track.is_dense
+                else int(track.frames[-1]) >= index.n_samples
+            )
+            if mismatch and not args.allow_length_mismatch:
                 raise SystemExit(
-                    f"{session}: video has {index.n_samples} frames, predictions have {track.n_frames} rows. "
+                    f"{session}: video has {index.n_samples} frames, predictions have {track.n_frames} rows "
+                    f"(frames {track.frames[0]}..{track.frames[-1]}). "
                     "Rows would not line up with frames; check the pair, or pass --allow-length-mismatch."
                 )
             extract_with_context(
@@ -90,7 +98,7 @@ def cmd_select(args) -> None:
             entries = [
                 project.queue_entry(
                     project.frame_path(folder, f), args.model_name, track.keypoints,
-                    track.xy[f], track.likelihood[f], args.prefill_min_likelihood,
+                    track.xy[track.row(f)], track.likelihood[track.row(f)], args.prefill_min_likelihood,
                 )  # fmt: skip
                 for f in picks["frame"]
             ]
