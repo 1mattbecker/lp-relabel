@@ -5,6 +5,10 @@ full-session video, and queue them in a Lightning Pose App project with the
 model's own keypoints already placed. You drag the wrong points, save, merge the
 new labels into the training set, and fine-tune.
 
+It also prepares video data for training (`clean-clips`, `cut-clips`, see
+"Video data prep for training"): clean clips, context frames and unlabeled clips
+that Lightning Pose reads frame-exactly.
+
 ```
 predictions CSV + video  ──select──▶  LP App project (frames + queue)  ──label in app──▶
 CollectedData.csv  ──merge──▶  training CSV  ──train / predict on Code Ocean──▶  new predictions
@@ -105,6 +109,74 @@ Each JPEG is located by its presentation time from the MP4 sample tables
 `img00123456.jpg` is row 123456 of the predictions. `tests/test_frames.py`
 checks this on an H.264 video with B-frames whose pixels encode their own frame
 number, including frames right after keyframes.
+
+## Video data prep for training
+
+Two commands turn labeled clips and session videos into a project that
+Lightning Pose's context model and unlabeled (semi-supervised) losses read
+correctly. Everything they write passes `read_mp4_frame_index(...)`:
+frame-addressing-safe edit list and a uniform timeline ("clean"), so DALI and
+frame-index addressing see exactly the displayed frames.
+
+### `clean-clips`: clean clips and context frames for a labeled project
+
+Clips cut by stream copy (as Pylon2Test2's were) index more samples than they
+display (591-743 vs 502), behind an edit list, and some have timestamp gaps.
+DALI and frame-index addressing misread them, so frame `k` of the file is not
+`img<k>.png`. Per clip with labeled frames, `clean-clips`:
+
+1. transcodes it losslessly with `transcode_video(normalize_cfr=True)` (a
+   temporary file) and checks the result is clean;
+2. checks every labeled PNG against `extract_frame_by_index` of that transcode
+   and stops if the mean absolute difference exceeds `MAX_DIFF` (0.05 of 255;
+   correct frames measure <= 0.004, a neighbouring frame >= 0.9);
+3. writes the neighbours `k-2, k-1, k+1, k+2` as PNGs beside the labeled frame,
+   named by their real frame index (none past either end of the clip; LP then
+   uses the labeled frame itself);
+4. writes `videos/<clip>.mp4`, a crf-18 `normalize_cfr` encode, for the
+   unlabeled losses.
+
+```bash
+lp-relabel clean-clips --labels CollectedData.train.csv \
+    --source https://<bucket>.s3.amazonaws.com/<prefix>/<project> --match _clip_ \
+    --out ~/LPProjects/p2t2_clean_build/p2t2_clean
+```
+
+`--source` (folder, http(s) or `s3://` prefix) holds `labeled-data/<clip>/img<k>.png`
+and `videos/<clip>.mp4` (or give `--videos`). `--out` gets `labeled-data/`,
+`videos/` and `checks.csv` (per labeled frame: clip frames, source samples,
+difference, neighbours written); upload it as is. Each finished clip leaves a
+record in `<out>_checks/`; a rerun skips those clips. Downloads retry, and
+`--workers` clips run at once. `--clips N` does the first N (a test).
+
+**Context stride.** Only stride 1 is supported. LP 2.4.3 reads a labeled
+frame's context as the files numbered `n-2..n+2` (`utils/io.get_context_img_paths`),
+and its DALI video readers (unlabeled losses, video inference) read consecutive
+frames with no stride option. Files at `k±5, k±10` named by real index would
+never be read. Context spanning more time at 500 Hz needs either LP changes
+or strided videos with frames renamed to their strided index (then not the
+real frame index), with video inference run on the same strided sequence.
+
+### `cut-clips`: unlabeled clips from session videos
+
+```bash
+lp-relabel cut-clips --manifest manifest.csv --total 120 --clip-frames 500 \
+    --labels data/CollectedData.csv --min-gap 2500 --span 0.1 0.9 \
+    --name-suffix _BottomCamera --out <project>/videos
+```
+
+Per session of the manifest (`session, video`; video local, URL or `s3://`),
+`-n` clips (or `--total` split evenly), each starting within `--span` of the
+video and more than `--min-gap` frames from every labeled frame of
+`labeled-data/<session>/` in the `--labels` CSVs and from the other starts.
+One seeded generator runs over the sessions in manifest order, so a rerun picks
+the same clips. Clips are cut as aind-dynamic-foraging-behavior-video-analysis's
+`cut_clip` does (seek by the frame's presentation time, exact frame count,
+re-encode crf 18 with even timestamps), named `<session><suffix>_f<start:07d>.mp4`
+with a JSON sidecar, and checked clean; a cut that is not clean is re-encoded
+with `normalize_cfr`, and the command stops if that is not clean either. Rerunning
+keeps finished clips. The clip table goes to `<out>_clips.csv` (`--table`).
+The source video must itself be frame-addressing-safe.
 
 ## Lightning Pose App on a Mac
 

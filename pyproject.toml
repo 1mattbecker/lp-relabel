@@ -13,10 +13,11 @@ dependencies = [
     "numpy",
     "pandas",
     "pyyaml",
+    "pillow",
     # Frame-exact seeking: presentation times from the MP4 sample tables,
-    # read over HTTP range requests for S3 URLs. Same pin as the
-    # dynamic-foraging video-analysis library.
-    "aind-video-utils==0.7.0",
+    # read over HTTP range requests for S3 URLs; transcode_video
+    # (normalize_cfr) and extract_frame_by_index for clean clips.
+    "aind-video-utils==0.11.0",
 ]
 
 [project.optional-dependencies]

@@ -1,4 +1,4 @@
-"""Command line: ``lp-relabel select`` and ``lp-relabel merge``."""
+"""Command line: ``lp-relabel select``, ``merge``, ``aind-sessions``, ``clean-clips``, ``cut-clips``."""
 
 from __future__ import annotations
 
@@ -177,6 +177,49 @@ def cmd_aind_sessions(args) -> None:
     logger.info("wrote %s", args.out)
 
 
+def cmd_clean_clips(args) -> None:
+    from lp_relabel.clips import clean_project
+
+    clean_project(
+        args.labels, args.source, Path(args.out), args.videos, args.match, args.clips, args.workers
+    )
+
+
+def cmd_cut_clips(args) -> None:
+    from aind_video_utils import read_mp4_frame_index
+
+    from lp_relabel.clips import clip_starts, cut_session_clips
+    from lp_relabel.frames import resolve_video
+
+    sessions = pd.read_csv(args.manifest)
+    if not {"session", "video"} <= set(sessions.columns):
+        raise SystemExit(f"{args.manifest}: needs columns session, video")
+    if args.total:
+        per = np.full(len(sessions), args.total // len(sessions))
+        per[: args.total - per.sum()] += 1
+    else:
+        per = np.full(len(sessions), args.n)
+    taken = project.known_frames(Path("."), [Path(p) for p in args.labels])
+    # One generator over the sessions in manifest order, so a rerun picks the same starts.
+    rng = np.random.default_rng(args.seed)
+    out_dir = Path(args.out)
+    rows = []
+    for row, n in zip(sessions.itertuples(index=False), per, strict=True):
+        session, video = str(row.session), str(row.video)
+        index = read_mp4_frame_index(resolve_video(video))
+        folder = project.safe_folder(session)
+        labeled = [f for (fold, f) in taken if fold == folder]
+        starts = clip_starts(index.n_samples, int(n), args.clip_frames, tuple(args.span), args.min_gap, labeled, rng)
+        clips = cut_session_clips(video, starts, args.clip_frames, out_dir, f"{folder}{args.name_suffix}", index)
+        rows.append(clips.assign(session=session, video=video, labeled_frames=len(labeled)))
+        logger.info("%s: %d clips (%d cut)", session, len(clips), (clips.status == "cut").sum())
+    table = pd.concat(rows, ignore_index=True)
+    out = Path(args.table) if args.table else out_dir.with_name(f"{out_dir.name}_clips.csv")
+    table.to_csv(out, index=False)
+    logger.info("wrote %d clips to %s, %d renormalized; table %s",
+                len(table), out_dir, int(table.renormalized.fillna(False).astype(bool).sum()), out)  # fmt: skip
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="lp-relabel", description=__doc__)
     p.add_argument("--version", action="version", version=__version__)
@@ -241,6 +284,42 @@ def build_parser() -> argparse.ArgumentParser:
     m.add_argument("--data-dir", help="check every frame and its context images exist under this directory")
     m.add_argument("--context", type=int, default=2, help="context frames to check on each side")
     m.set_defaults(func=cmd_merge)
+
+    k = sub.add_parser(
+        "clean-clips",
+        help="re-encode a labeled project's clips clean, check its labeled frames, write context frames",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    k.add_argument("--labels", required=True, help="label CSV whose frames to check (labeled-data/<clip>/img<k>.png)")
+    k.add_argument("--source", required=True,
+                   help="folder or http(s)/s3 prefix holding labeled-data/ (and videos/<clip>.mp4)")  # fmt: skip
+    k.add_argument("--videos", help="folder or prefix of the <clip>.mp4 files (default <source>/videos)")
+    k.add_argument("--out", required=True, help="project folder to write; check records go to <out>_checks/")
+    k.add_argument("--match", help="only clip folders matching this regex, e.g. _clip_")
+    k.add_argument("--clips", type=int, help="only the first N clips, in name order (a test)")
+    k.add_argument("--workers", type=int, default=6, help="clips processed at once")
+    k.set_defaults(func=cmd_clean_clips)
+
+    u = sub.add_parser(
+        "cut-clips",
+        help="cut clean unlabeled clips from session videos, away from labeled frames",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    u.add_argument("--manifest", required=True, help="CSV with columns session, video (path, URL or s3://)")
+    u.add_argument("--out", required=True, help="folder for the clips, e.g. <project>/videos")
+    n = u.add_mutually_exclusive_group(required=True)
+    n.add_argument("-n", type=int, help="clips per session")
+    n.add_argument("--total", type=int, help="clips in all, split evenly over the sessions")
+    u.add_argument("--labels", nargs="*", default=[],
+                   help="label CSVs (and their queues) whose frames, labeled-data/<session>/img<frame>, to keep away from")  # fmt: skip
+    u.add_argument("--clip-frames", type=int, default=500, help="frames per clip")
+    u.add_argument("--span", type=float, nargs=2, default=[0.1, 0.9], metavar=("START", "END"),
+                   help="clips start within this fraction of the video")  # fmt: skip
+    u.add_argument("--min-gap", type=int, default=2500, help="frames between a clip start and labeled frames or other starts")
+    u.add_argument("--name-suffix", default="", help="added to the session in clip names, e.g. _BottomCamera")
+    u.add_argument("--seed", type=int, default=0)
+    u.add_argument("--table", help="clip table CSV to write (default <out>_clips.csv)")
+    u.set_defaults(func=cmd_cut_clips)
     return p
 
 
